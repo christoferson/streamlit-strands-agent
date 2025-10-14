@@ -1,6 +1,7 @@
 import streamlit as st
 from strands import Agent, tool
 from strands.models import BedrockModel
+from strands_tools import calculator, current_time
 import boto3
 import json
 import base64
@@ -90,8 +91,9 @@ def initialize_agent():
 
     agent = Agent(
         model=bedrock_model,
-        system_prompt="You are a helpful assistant. When users ask to generate, create, draw, or make images, use the generate_image tool with detailed, descriptive prompts.",
-        tools=[generate_image]
+        #system_prompt="You are a helpful assistant. When users ask to generate, create, draw, or make images, use the generate_image tool with detailed, descriptive prompts.",
+        system_prompt="You are a helpful assistant.",
+        tools=[calculator, current_time, generate_image]
     )
 
     return agent
