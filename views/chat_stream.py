@@ -91,8 +91,15 @@ def initialize_agent():
 
     agent = Agent(
         model=bedrock_model,
-        #system_prompt="You are a helpful assistant. When users ask to generate, create, draw, or make images, use the generate_image tool with detailed, descriptive prompts.",
-        system_prompt="You are a helpful assistant.",
+        system_prompt="""You are a helpful assistant. 
+
+IMPORTANT: Before using any tool, always explain what you're going to do first. 
+For example:
+- "I'll calculate that for you..." then use calculator
+- "Let me check the current time..." then use current_time  
+- "I'll generate an image of [description]..." then use generate_image
+
+Always provide context and explanation before and after using tools.""",
         tools=[calculator, current_time, generate_image]
     )
 
@@ -102,7 +109,7 @@ agent = initialize_agent()
 
 # App title
 st.title("💬 Strands Chat App")
-st.caption("Powered by Claude Sonnet 4 & Stability AI Ultra")
+st.caption("Powered by Claude Sonnet 4 & Stability AI")
 
 # Initialize session state
 if "messages" not in st.session_state:
@@ -129,53 +136,78 @@ if prompt := st.chat_input("What would you like to know?"):
         st.markdown(prompt)
 
     with st.chat_message("assistant"):
-        with st.spinner("Thinking..."):
-            try:
-                # Track how many images we had before
-                images_before = len(st.session_state.generated_images)
+        message_placeholder = st.empty()
+        full_response = ""
 
-                # Call agent asynchronously
-                async def get_response():
-                    return await agent.invoke_async(prompt)
+        try:
+            # Track how many images we had before
+            images_before = len(st.session_state.generated_images)
 
-                response = asyncio.run(get_response())
-                response_text = str(response)
+            # Stream the response
+            async def stream_response():
+                response_text = ""
+                async for chunk in agent.stream_async(prompt):
+                    # Handle text chunks
+                    if isinstance(chunk, str):
+                        response_text += chunk
+                        message_placeholder.markdown(response_text + "▌")
+                    elif isinstance(chunk, dict):
+                        # Handle event-based chunks
+                        if 'event' in chunk:
+                            event = chunk['event']
 
-                st.markdown(response_text)
+                            # Handle text deltas
+                            if 'contentBlockDelta' in event:
+                                delta = event['contentBlockDelta'].get('delta', {})
+                                if 'text' in delta:
+                                    response_text += delta['text']
+                                    message_placeholder.markdown(response_text + "▌")
 
-                # Check if new images were generated
-                images_after = len(st.session_state.generated_images)
+                            # Handle complete text
+                            elif 'text' in event:
+                                response_text += event['text']
+                                message_placeholder.markdown(response_text + "▌")
 
-                if images_after > images_before:
-                    # Display all new images
-                    for i in range(images_before, images_after):
-                        image_bytes = st.session_state.generated_images[i]
-                        image = Image.open(BytesIO(image_bytes))
-                        st.image(image, width='stretch')
+                # Remove cursor
+                message_placeholder.markdown(response_text)
+                return response_text
 
-                        # Add to message history
-                        st.session_state.messages.append({
-                            "role": "assistant",
-                            "type": "image",
-                            "text": response_text,
-                            "content": image
-                        })
-                else:
-                    # Text-only response
+            # Run streaming
+            full_response = asyncio.run(stream_response())
+
+            # Check if new images were generated
+            images_after = len(st.session_state.generated_images)
+
+            if images_after > images_before:
+                # Display all new images
+                for i in range(images_before, images_after):
+                    image_bytes = st.session_state.generated_images[i]
+                    image = Image.open(BytesIO(image_bytes))
+                    st.image(image, width='stretch')
+
+                    # Add to message history
                     st.session_state.messages.append({
                         "role": "assistant",
-                        "content": response_text
+                        "type": "image",
+                        "text": full_response,
+                        "content": image
                     })
-
-            except Exception as e:
-                error_message = f"Error: {str(e)}"
-                st.error(error_message)
-                import traceback
-                st.code(traceback.format_exc())
+            else:
+                # Text-only response
                 st.session_state.messages.append({
                     "role": "assistant",
-                    "content": error_message
+                    "content": full_response
                 })
+
+        except Exception as e:
+            error_message = f"Error: {str(e)}"
+            st.error(error_message)
+            import traceback
+            st.code(traceback.format_exc())
+            st.session_state.messages.append({
+                "role": "assistant",
+                "content": error_message
+            })
 
 # Sidebar
 with st.sidebar:
@@ -194,11 +226,28 @@ with st.sidebar:
 
     st.subheader("Model Info")
     st.text("Chat: Claude Sonnet 4")
-    st.text("Image: Stability Ultra v1")
+    st.text("Image: SD 3.5 Large")
     st.text("Region: us-west-2")
+
+    st.divider()
+
+    st.subheader("Available Tools")
+    st.text("🎨 Image Generation")
+    st.text("🧮 Calculator")
+    st.text("🕐 Current Time")
 
     st.divider()
 
     with st.expander("🔍 Debug"):
         if hasattr(agent, 'tool_names'):
             st.write("Tool names:", agent.tool_names)
+
+    st.divider()
+
+    with st.expander("💡 Example Prompts"):
+        st.markdown("""
+        **Try these:**
+        - Generate an image of Tokyo
+        - What is 1234 * 5678?
+        - What time is it?
+        """)
