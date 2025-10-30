@@ -4,6 +4,7 @@ import asyncio
 from mcp.client.streamable_http import streamablehttp_client
 from strands import Agent
 from strands.tools.mcp import MCPClient
+from strands_tools import calculator, current_time
 
 # ============================================================
 # Page Configuration
@@ -58,21 +59,29 @@ def connect_to_mcp(mcp_url: str):
 
         # Get tools from MCP server
         with mcp_client as client:
-            tools = client.list_tools_sync()
+            mcp_tools = client.list_tools_sync()
 
-            # Create agent with tools
+            # Combine MCP tools with strands_tools
+            all_tools = [calculator, current_time] + mcp_tools
+
+            # Create agent with all tools
             agent = Agent(
-                tools=tools,
-                system_prompt="You are a helpful assistant with access to AWS knowledge and documentation."
+                tools=all_tools,
+                system_prompt="""You are a helpful assistant with access to:
+- AWS knowledge and documentation (via MCP)
+- Calculator for mathematical operations
+- Current time information
+
+Always explain what you're going to do before using tools."""
             )
 
             # Store in session state
             st.session_state.menu_mcp_chat_stream_agent = agent
             st.session_state.menu_mcp_chat_stream_mcp_client = mcp_client
             st.session_state.menu_mcp_chat_stream_initialized = True
-            st.session_state.menu_mcp_chat_stream_tool_count = len(tools)
+            st.session_state.menu_mcp_chat_stream_tool_count = len(all_tools)
 
-            return True, f"✅ Connected! {len(tools)} tools available"
+            return True, f"✅ Connected! {len(all_tools)} tools available ({len(mcp_tools)} MCP + 2 built-in)"
 
     except Exception as e:
         return False, f"❌ Connection Error: {str(e)}"
@@ -132,6 +141,14 @@ with st.sidebar:
 
     st.markdown("---")
 
+    # Available Tools
+    st.subheader("🛠️ Available Tools")
+    st.text("🧮 Calculator")
+    st.text("🕐 Current Time")
+    st.text("📚 AWS Knowledge (MCP)")
+
+    st.markdown("---")
+
     # Chat Controls
     st.subheader("🎛️ Controls")
     if st.button("🗑️ Clear Chat", use_container_width=True, key="menu_mcp_chat_stream_clear"):
@@ -143,12 +160,18 @@ with st.sidebar:
     # Example Queries
     with st.expander("💡 Example Queries"):
         st.markdown("""
-        **Try these:**
+        **AWS Questions:**
         - What are AWS S3 bucket naming rules?
         - Is Lambda available in eu-west-1?
         - Explain DynamoDB best practices
-        - What are the S3 storage classes?
-        - Compare ECS and EKS
+
+        **Calculator:**
+        - What is 1234 * 5678?
+        - Calculate 15% of 250
+
+        **Time:**
+        - What time is it?
+        - What's the current date and time?
         """)
 
 # ============================================================
@@ -156,7 +179,7 @@ with st.sidebar:
 # ============================================================
 
 st.title("💬 Chat with MCP")
-st.caption("Streaming responses from AWS Knowledge Base")
+st.caption("Streaming responses with AWS Knowledge, Calculator & Time tools")
 
 # Display chat history
 for message in st.session_state.menu_mcp_chat_stream_messages:
