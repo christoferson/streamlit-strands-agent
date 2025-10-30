@@ -64,6 +64,20 @@ with st.sidebar:
     max_tokens = st.slider("Max Tokens", 4096, 4096*3, 4096)
     temperature = st.slider("Temperature", 0.0, 1.0, 0.1, 0.1)
 
+    # Cache Configuration
+    st.subheader("Cache Configuration")
+    enable_system_cache = st.checkbox(
+        "Cache System Prompt",
+        value=False,
+        help="Cache the system prompt to reduce latency and costs for repeated requests"
+    )
+
+    enable_document_cache = st.checkbox(
+        "Cache Documents",
+        value=False,
+        help="Cache uploaded documents to reduce processing time in multi-turn conversations"
+    )
+
     # System Prompt
     st.subheader("System Prompt")
     system_prompt = st.text_area(
@@ -83,7 +97,7 @@ with st.sidebar:
     if uploaded_file:
         file_type = uploaded_file.type
         if file_type.startswith('image/'):
-            st.image(uploaded_file, caption="Uploaded Image", use_container_width=True)
+            st.image(uploaded_file, caption="Uploaded Image", width='stretch')
         else:
             st.info(f"📄 {uploaded_file.name} ({uploaded_file.size} bytes)")
 
@@ -93,6 +107,10 @@ with st.sidebar:
         st.rerun()
 
     st.success("🟢 Connected to Bedrock (us-east-1)")
+
+    # Cache info
+    if enable_system_cache or enable_document_cache:
+        st.info("💾 Caching enabled - First request writes to cache, subsequent requests read from cache")
 
 # Main content
 st.title("💬 AWS Bedrock Converse Stream")
@@ -112,6 +130,38 @@ for message in st.session_state.messages:
         # Display text content
         if "text" in message:
             st.markdown(message["text"])
+
+        # Display metadata if present (for assistant messages)
+        if "metadata" in message:
+            metadata = message["metadata"]
+
+            # Build metadata string
+            meta_parts = []
+
+            # Token usage
+            if "usage" in metadata:
+                usage = metadata["usage"]
+                input_tok = usage.get('inputTokens', 0)
+                output_tok = usage.get('outputTokens', 0)
+                cache_read = usage.get('cacheReadInputTokens', 0)
+                cache_write = usage.get('cacheWriteInputTokens', 0)
+
+                meta_parts.append(f"Input: {input_tok:,} | Output: {output_tok:,}")
+
+                if cache_read > 0:
+                    meta_parts.append(f"💾 Cache Read: {cache_read:,}")
+                if cache_write > 0:
+                    meta_parts.append(f"💾 Cache Write: {cache_write:,}")
+
+            # Latency
+            if "metrics" in metadata:
+                metrics = metadata["metrics"]
+                latency = metrics.get('latencyMs', 0)
+                if latency > 0:
+                    meta_parts.append(f"⏱️ {latency:,}ms")
+
+            if meta_parts:
+                st.caption(f"📊 {' | '.join(meta_parts)}")
 
 # Chat input
 if prompt := st.chat_input("Type your message here..."):
@@ -180,12 +230,21 @@ if prompt := st.chat_input("Type your message here..."):
                 }
             })
 
+            # Add cache point for document if enabled
+            if enable_document_cache:
+                message_content.append({
+                    "cachePoint": {
+                        "type": "default"
+                    }
+                })
+
             file_data = {
                 "type": "document",
                 "name": sanitized_filename,
                 "original_name": original_filename,
                 "format": doc_format,
-                "content": file_bytes
+                "content": file_bytes,
+                "cached": enable_document_cache
             }
 
     # Add text to message content
@@ -205,7 +264,8 @@ if prompt := st.chat_input("Type your message here..."):
                 "name": file_data["name"],
                 "original_name": file_data["original_name"],
                 "format": file_data["format"],
-                "content": file_data["content"]
+                "content": file_data["content"],
+                "cached": file_data.get("cached", False)
             }
 
     st.session_state.messages.append(user_message)
@@ -216,7 +276,8 @@ if prompt := st.chat_input("Type your message here..."):
             if file_data["type"] == "image":
                 st.image(file_data["data"], caption="Uploaded Image", width=300)
             elif file_data["type"] == "document":
-                st.info(f"📄 {file_data['original_name']}")
+                cache_indicator = " 💾" if file_data.get("cached") else ""
+                st.info(f"📄 {file_data['original_name']}{cache_indicator}")
         st.markdown(prompt)
 
     # Display assistant response with streaming
@@ -224,8 +285,12 @@ if prompt := st.chat_input("Type your message here..."):
         message_placeholder = st.empty()
         token_placeholder = st.empty()
         full_response = ""
-        input_tokens = 0
-        output_tokens = 0
+
+        # Metadata tracking
+        metadata = {
+            "usage": {},
+            "metrics": {}
+        }
 
         try:
             # Prepare messages for API
@@ -257,6 +322,14 @@ if prompt := st.chat_input("Type your message here..."):
                         }
                     })
 
+                    # Add cache point after document if it was cached
+                    if doc.get("cached", False):
+                        content.append({
+                            "cachePoint": {
+                                "type": "default"
+                            }
+                        })
+
                 # Add text
                 if "text" in msg:
                     content.append({"text": msg["text"]})
@@ -266,10 +339,18 @@ if prompt := st.chat_input("Type your message here..."):
                     "content": content
                 })
 
-            # Prepare system prompt
+            # Prepare system prompt with optional cache point
             system_config = None
             if system_prompt.strip():
                 system_config = [{"text": system_prompt}]
+
+                # Add cache point for system prompt if enabled
+                if enable_system_cache:
+                    system_config.append({
+                        "cachePoint": {
+                            "type": "default"
+                        }
+                    })
 
             # Call converse_stream API
             response = bedrock_client.converse_stream(
@@ -299,23 +380,51 @@ if prompt := st.chat_input("Type your message here..."):
                             st.info(f"ℹ️ Stop reason: {stop_reason}")
 
                     elif 'metadata' in event:
-                        metadata = event['metadata']
-                        if 'usage' in metadata:
-                            usage = metadata['usage']
-                            input_tokens = usage.get('inputTokens', 0)
-                            output_tokens = usage.get('outputTokens', 0)
+                        event_metadata = event['metadata']
+
+                        # Capture usage data
+                        if 'usage' in event_metadata:
+                            metadata['usage'] = event_metadata['usage']
+                            
+
+                        # Capture metrics data
+                        if 'metrics' in event_metadata:
+                            metadata['metrics'] = event_metadata['metrics']
 
             # Update the final message
             message_placeholder.markdown(full_response)
 
-            # Display simplified token usage
-            if input_tokens > 0 or output_tokens > 0:
-                token_placeholder.caption(f"📊 Input Tokens: {input_tokens:,} | Output Tokens: {output_tokens:,}")
+            # Display metadata
+            meta_parts = []
 
-            # Add assistant response to chat history
+            if metadata.get('usage'):
+                usage = metadata['usage']
+                input_tok = usage.get('inputTokens', 0)
+                output_tok = usage.get('outputTokens', 0)
+                cache_read = usage.get('cacheReadInputTokens', 0)
+                cache_write = usage.get('cacheWriteInputTokens', 0)
+
+                meta_parts.append(f"Input: {input_tok:,} | Output: {output_tok:,}")
+
+                if cache_read > 0:
+                    meta_parts.append(f"💾 Cache Read: {cache_read:,}")
+                if cache_write > 0:
+                    meta_parts.append(f"💾 Cache Write: {cache_write:,}")
+
+            if metadata.get('metrics'):
+                metrics = metadata['metrics']
+                latency = metrics.get('latencyMs', 0)
+                if latency > 0:
+                    meta_parts.append(f"⏱️ {latency:,}ms")
+
+            if meta_parts:
+                token_placeholder.caption(f"📊 {' | '.join(meta_parts)}")
+
+            # Add assistant response to chat history with metadata
             st.session_state.messages.append({
                 "role": "assistant",
-                "text": full_response
+                "text": full_response,
+                "metadata": metadata
             })
 
         except ClientError as e:
