@@ -4,7 +4,7 @@ import asyncio
 from mcp.client.streamable_http import streamablehttp_client
 from strands import Agent
 from strands.tools.mcp import MCPClient
-from strands_tools import calculator, current_time
+from strands_tools import calculator, current_time, diagram
 
 # ============================================================
 # Page Configuration
@@ -62,7 +62,7 @@ def connect_to_mcp(mcp_url: str):
             mcp_tools = client.list_tools_sync()
 
             # Combine MCP tools with strands_tools
-            all_tools = [calculator, current_time] + mcp_tools
+            all_tools = [calculator, current_time, diagram] + mcp_tools
 
             # Create agent with all tools
             agent = Agent(
