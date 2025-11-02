@@ -85,6 +85,7 @@ async def generate_image(prompt: str, aspect_ratio: str = "1:1") -> str:
 def initialize_agent():
     bedrock_model = BedrockModel(
         model_id="us.anthropic.claude-sonnet-4-20250514-v1:0",
+        #model_id="us.amazon.nova-premier-v1:0",
         region_name="us-east-1",
         temperature=0.1,
     )
