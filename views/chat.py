@@ -92,7 +92,8 @@ def generate_image(prompt: str, aspect_ratio: str = "1:1") -> str:
 @st.cache_resource
 def initialize_agent():
     bedrock_model = BedrockModel(
-        model_id="us.anthropic.claude-sonnet-4-20250514-v1:0",
+        #model_id="us.anthropic.claude-sonnet-4-20250514-v1:0",
+        model_id ="global.anthropic.claude-opus-4-5-20251101-v1:0",
         region_name="us-east-1",
         temperature=0.1,
     )
