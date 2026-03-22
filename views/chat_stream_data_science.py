@@ -11,7 +11,7 @@ from strands import Agent, tool
 from strands.models import BedrockModel
 from strands_tools import current_time
 
-from cmn.tools.tool import calculator, sales_data, generate_image
+from cmn.tools.tool import calculator, sales_data, generate_image, render_chart, render_chart_payload
 
 # ── Page config ───────────────────────────────────────────────────────────────
 
@@ -29,8 +29,8 @@ bedrock_runtime_us_west_2 = boto3.client("bedrock-runtime", region_name="us-west
 
 # ── System prompt ─────────────────────────────────────────────────────────────
 
-SYSTEM_PROMPT = """You are a helpful assistant with access to sales data, \
-an image generator, a calculator, and a clock.
+SYSTEM_PROMPT = """You are a helpful assistant with access to sales data,
+an image generator, a calculator, a clock, and a chart renderer.
 
 IMPORTANT: Before using any tool, always explain what you are going to do first.
 Examples:
@@ -38,6 +38,20 @@ Examples:
 - "Let me check the current time…"      → then use current_time
 - "I'll generate an image of [desc]…"   → then use generate_image
 - "Let me pull the sales figures for…"  → then use sales_data
+- "I'll render that as a chart…"        → then use render_chart
+
+When rendering charts:
+- Always fetch data first with sales_data, then call render_chart.
+- x_label and y_label must exactly match column names from the data.
+- Use month_name for the x axis when charting monthly data.
+- For multi-series charts (e.g. comparing two years), add a 'series' column
+  to each row to identify the series name. Example:
+  [
+    {"month_name": "January", "revenue": 205000, "series": "2023"},
+    {"month_name": "January", "revenue": 213000, "series": "2024"},
+    ...
+  ]
+  Then set x_label='month_name', y_label='revenue'.
 
 When presenting sales data:
 - Use clear markdown tables where helpful.
@@ -46,63 +60,6 @@ When presenting sales data:
 
 Always provide context and explanation before and after using tools."""
 
-
-# ── Image generation tool ─────────────────────────────────────────────────────
-
-# @tool
-# async def generate_image(prompt: str, aspect_ratio: str = "1:1") -> str:
-#     """
-#     Generate an image using Stability AI based on a text description.
-
-#     Use this tool when users ask you to create, generate, draw, make, or
-#     produce images.
-
-#     Args:
-#         prompt: Detailed text description of the image to generate.
-#         aspect_ratio: Image aspect ratio — '1:1', '16:9', '9:16', etc.
-
-#     Returns:
-#         str: Success message with generation details.
-#     """
-#     try:
-#         seed = random.randint(0, 4294967295)
-
-#         request = {
-#             "prompt":        prompt[:10000],
-#             "mode":          "text-to-image",
-#             "aspect_ratio":  aspect_ratio,
-#             "output_format": "png",
-#             "seed":          seed,
-#         }
-
-#         loop = asyncio.get_event_loop()
-#         response = await loop.run_in_executor(
-#             None,
-#             lambda: bedrock_runtime_us_west_2.invoke_model(
-#                 modelId="stability.sd3-5-large-v1:0",
-#                 contentType="application/json",
-#                 accept="application/json",
-#                 body=json.dumps(request),
-#             ),
-#         )
-
-#         response_body = json.loads(response.get("body").read())
-#         finish_reason = response_body.get("finish_reasons", [None])[0]
-
-#         if finish_reason is not None:
-#             return f"Image generation error: {finish_reason}"
-
-#         image_bytes = base64.b64decode(response_body["images"][0])
-
-#         if "generated_images" not in st.session_state:
-#             st.session_state.generated_images = []
-
-#         st.session_state.generated_images.append(image_bytes)
-#         return f"✅ Image generated successfully! (seed: {seed})"
-
-#     except Exception as e:
-#         import traceback
-#         return f"❌ Error: {str(e)}\n{traceback.format_exc()}"
 
 
 # ── Agent (cached) ────────────────────────────────────────────────────────────
@@ -118,7 +75,7 @@ def initialize_agent() -> Agent:
     return Agent(
         model=bedrock_model,
         system_prompt=SYSTEM_PROMPT,
-        tools=[calculator, current_time, generate_image, sales_data],
+        tools=[calculator, current_time, generate_image, sales_data, render_chart],
     )
 
 
@@ -163,7 +120,53 @@ if prompt := st.chat_input("What would you like to know?"):
 
             async def stream_response() -> str:
                 response_text = ""
+                last_tool_name = None
+                chart_payloads = []
                 async for chunk in agent.stream_async(prompt):
+
+                    # ── Text chunks ───────────────────────────────────────────────
+                    #if "data" in chunk:
+                    #    response_text += chunk["data"]
+                    #    message_placeholder.markdown(response_text + "▌")
+                        
+                    # # ── Tool starting ─────────────────────────────────────────────
+                    # if "current_tool_use" in chunk:
+                    #     tool_name = chunk["current_tool_use"].get("name")
+                    #     if tool_name and tool_name != last_tool_name:
+                    #         last_tool_name = tool_name
+
+                    # # ── Tool complete — result arrives in user-role message ───────
+                    # if "message" in chunk:
+                    #     msg = chunk["message"]
+                    #     if msg.get("role") == "user":
+                    #         for block in msg.get("content", []):
+                    #             if "toolResult" in block and last_tool_name:
+                    #                 status = block["toolResult"].get("status", "unknown")
+                    #                 icon   = "✅" if status == "success" else "❌"
+                    #                 print(f"{icon} Tool complete: {last_tool_name} ({status})")
+                    #                 #status_widget.write(f"{icon} Tool complete: **{last_tool_name}**")
+                    #                 last_tool_name = None
+
+                    # ── Tool complete ─────────────────────────────────────────────
+                    if "result" in chunk:
+                        for tool_name, tool_metrics in chunk["result"].metrics.tool_metrics.items():
+                            print(f"✅ Tool complete: {tool_name} "
+                                f"calls={tool_metrics.call_count} "
+                                f"ok={tool_metrics.success_count} "
+                                f"errors={tool_metrics.error_count}")
+                            if tool_name == "render_chart":
+                                # tool_use.input has the original args passed to the tool
+                                tool_input = tool_metrics.tool.get("input", {})
+                                if tool_input.get("data"):
+                                    chart_payloads.append({
+                                        "chart_type": tool_input.get("chart_type"),
+                                        "title":      tool_input.get("title"),
+                                        "x_label":    tool_input.get("x_label"),
+                                        "y_label":    tool_input.get("y_label"),
+                                        "data":       tool_input.get("data"),
+                                        "color":      tool_input.get("color", ""),
+                                    })
+
                     if isinstance(chunk, str):
                         response_text += chunk
                         message_placeholder.markdown(response_text + "▌")
@@ -178,10 +181,23 @@ if prompt := st.chat_input("What would you like to know?"):
                             response_text += event["text"]
                             message_placeholder.markdown(response_text + "▌")
 
-                message_placeholder.markdown(response_text)
-                return response_text
+                
 
-            full_response = asyncio.run(stream_response())
+                message_placeholder.markdown(response_text)
+                return response_text, chart_payloads 
+
+            full_response, chart_payloads  = asyncio.run(stream_response())
+
+            # ── Render charts ─────────────────────────────────────────────────────
+            for payload in chart_payloads:
+                render_chart_payload(payload, st.container())
+                st.session_state.messages.append({
+                    "role":    "assistant",
+                    "type":    "chart",
+                    "text":    full_response,
+                    "content": payload,
+                })
+
 
             images_after = len(st.session_state.generated_images)
 
