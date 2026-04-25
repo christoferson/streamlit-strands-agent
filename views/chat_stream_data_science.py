@@ -18,10 +18,10 @@ from cmn.tools.tool.image import generate_image
 from cmn.tools.tool.pdf import generate_pdf_report
 from cmn.tools.tool.chart import render_chart
 
-# New architecture - renderers
-from views.streamlit.pdf import PdfRenderer
-from views.streamlit.chart import ChartRenderer
-from views.streamlit.image import ImageRenderer
+# New architecture - renderers (mirrors cmn.tools.tool structure)
+from views.tools.tool.pdf import PdfRenderer
+from views.tools.tool.chart import ChartRenderer
+from views.tools.tool.image import ImageRenderer
 
 # ── Page config ───────────────────────────────────────────────────────────────
 
@@ -243,67 +243,26 @@ if prompt := st.chat_input("What would you like to know?"):
 
             async def stream_response() -> str:
                 response_text = ""
-                last_tool_name = None
+                tool_names_map = {}
                 chart_payloads = []
                 pdf_payloads = []
+
                 async for chunk in agent.stream_async(prompt):
+                    # Track tool use blocks
+                    if isinstance(chunk, dict) and "event" in chunk:
+                        event = chunk["event"]
 
-                    # ── Text chunks ───────────────────────────────────────────────
-                    #if "data" in chunk:
-                    #    response_text += chunk["data"]
-                    #    message_placeholder.markdown(response_text + "▌")
-                        
-                    # # ── Tool starting ─────────────────────────────────────────────
-                    # if "current_tool_use" in chunk:
-                    #     tool_name = chunk["current_tool_use"].get("name")
-                    #     if tool_name and tool_name != last_tool_name:
-                    #         last_tool_name = tool_name
+                        # Tool use starts
+                        if "contentBlockStart" in event:
+                            start_block = event["contentBlockStart"]
+                            if "toolUse" in start_block:
+                                tool_use = start_block["toolUse"]
+                                tool_use_id = tool_use.get("toolUseId")
+                                tool_name = tool_use.get("name")
+                                if tool_use_id and tool_name:
+                                    tool_names_map[tool_use_id] = tool_name
 
-                    # # ── Tool complete — result arrives in user-role message ───────
-                    # if "message" in chunk:
-                    #     msg = chunk["message"]
-                    #     if msg.get("role") == "user":
-                    #         for block in msg.get("content", []):
-                    #             if "toolResult" in block and last_tool_name:
-                    #                 status = block["toolResult"].get("status", "unknown")
-                    #                 icon   = "✅" if status == "success" else "❌"
-                    #                 print(f"{icon} Tool complete: {last_tool_name} ({status})")
-                    #                 #status_widget.write(f"{icon} Tool complete: **{last_tool_name}**")
-                    #                 last_tool_name = None
-
-                    # ── Tool complete ─────────────────────────────────────────────
-                    if "result" in chunk:
-                        for tool_name, tool_metrics in chunk["result"].metrics.tool_metrics.items():
-                            print(f"Tool complete: {tool_name} "
-                                f"calls={tool_metrics.call_count} "
-                                f"ok={tool_metrics.success_count} "
-                                f"errors={tool_metrics.error_count}")
-                            if tool_name == "render_chart":
-                                # Extract result from tool output (JSON string)
-                                for tool_result in tool_metrics.results:
-                                    if tool_result.get("status") == "success":
-                                        result_str = tool_result.get("output", "{}")
-                                        try:
-                                            result_data = json.loads(result_str)
-                                            chart_payloads.append(result_data)
-                                        except json.JSONDecodeError:
-                                            print(f"Failed to parse chart result: {result_str}")
-                            elif tool_name == "generate_pdf_report":
-                                # Extract result from tool output (JSON string)
-                                for tool_result in tool_metrics.results:
-                                    if tool_result.get("status") == "success":
-                                        result_str = tool_result.get("output", "{}")
-                                        try:
-                                            result_data = json.loads(result_str)
-                                            pdf_payloads.append(result_data)
-                                        except json.JSONDecodeError:
-                                            print(f"Failed to parse PDF result: {result_str}")
-
-                    if isinstance(chunk, str):
-                        response_text += chunk
-                        message_placeholder.markdown(response_text + "▌")
-                    elif isinstance(chunk, dict):
-                        event = chunk.get("event", {})
+                        # Text chunks
                         if "contentBlockDelta" in event:
                             delta = event["contentBlockDelta"].get("delta", {})
                             if "text" in delta:
@@ -313,7 +272,42 @@ if prompt := st.chat_input("What would you like to know?"):
                             response_text += event["text"]
                             message_placeholder.markdown(response_text + "▌")
 
+                    # String chunks
+                    elif isinstance(chunk, str):
+                        response_text += chunk
+                        message_placeholder.markdown(response_text + "▌")
 
+                    # Check for message chunks that contain tool results
+                    if isinstance(chunk, dict) and "message" in chunk:
+                        msg = chunk["message"]
+
+                        if msg.get("role") == "user":
+                            # User messages contain tool results
+                            for block in msg.get("content", []):
+                                if isinstance(block, dict) and "toolResult" in block:
+                                    tool_use_id = block.get("toolUseId")
+                                    tool_name = tool_names_map.get(tool_use_id)
+
+                                    # Only process tools that return JSON payloads for rendering
+                                    if tool_name not in ["render_chart", "generate_pdf_report"]:
+                                        continue
+
+                                    # Extract content
+                                    tool_result = block["toolResult"]
+                                    if "content" in tool_result:
+                                        for content_item in tool_result["content"]:
+                                            if isinstance(content_item, dict) and "text" in content_item:
+                                                result_text = content_item["text"]
+
+                                                try:
+                                                    result_data = json.loads(result_text)
+                                                    if result_data.get("status") == "success":
+                                                        if tool_name == "render_chart":
+                                                            chart_payloads.append(result_data)
+                                                        elif tool_name == "generate_pdf_report":
+                                                            pdf_payloads.append(result_data)
+                                                except json.JSONDecodeError:
+                                                    pass
 
                 message_placeholder.markdown(response_text)
                 return response_text, chart_payloads, pdf_payloads

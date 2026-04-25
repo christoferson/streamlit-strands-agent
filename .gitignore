@@ -205,3 +205,19 @@ cython_debug/
 marimo/_static/
 marimo/_lsp/
 __marimo__/
+
+# Project-specific
+# Generated outputs
+outputs/
+*.pdf
+
+# Temporary files
+*.tmp.*
+.tmp/
+
+# IDE-specific
+.vscode/
+.idea/
+
+# Streamlit
+.streamlit/secrets.toml
