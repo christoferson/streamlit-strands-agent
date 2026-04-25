@@ -11,7 +11,7 @@ from strands import Agent, tool
 from strands.models import BedrockModel
 from strands_tools import current_time
 
-from cmn.tools.tool import calculator, sales_data, generate_image, render_chart, render_chart_payload
+from cmn.tools.tool import calculator, sales_data, generate_image, render_chart, render_chart_payload, generate_pdf_report, render_pdf_payload
 
 # ── Page config ───────────────────────────────────────────────────────────────
 
@@ -30,7 +30,7 @@ bedrock_runtime_us_west_2 = boto3.client("bedrock-runtime", region_name="us-west
 # ── System prompt ─────────────────────────────────────────────────────────────
 
 SYSTEM_PROMPT = """You are a helpful assistant with access to sales data,
-an image generator, a calculator, a clock, and a chart renderer.
+an image generator, a calculator, a clock, a chart renderer, and a PDF report generator.
 
 IMPORTANT: Before using any tool, always explain what you are going to do first.
 Examples:
@@ -39,6 +39,7 @@ Examples:
 - "I'll generate an image of [desc]…"   → then use generate_image
 - "Let me pull the sales figures for…"  → then use sales_data
 - "I'll render that as a chart…"        → then use render_chart
+- "I'll create a PDF report for you…"   → then use generate_pdf_report
 
 When rendering charts:
 - Always fetch data first with sales_data, then call render_chart.
@@ -58,6 +59,11 @@ When presenting sales data:
 - Highlight notable trends (best/worst month, YoY changes, dips, recoveries).
 - Always provide a short written summary after showing numbers.
 
+When generating PDF reports:
+- Always fetch data with sales_data first, then call generate_pdf_report.
+- Include a meaningful summary parameter to provide context in the PDF.
+- PDF reports are great for saving, sharing, or archiving analysis results.
+
 Always provide context and explanation before and after using tools."""
 
 
@@ -75,7 +81,7 @@ def initialize_agent() -> Agent:
     return Agent(
         model=bedrock_model,
         system_prompt=SYSTEM_PROMPT,
-        tools=[calculator, current_time, generate_image, sales_data, render_chart],
+        tools=[calculator, current_time, generate_image, sales_data, render_chart, generate_pdf_report],
     )
 
 
@@ -93,6 +99,9 @@ if "messages" not in st.session_state:
 if "generated_images" not in st.session_state:
     st.session_state.generated_images = []
 
+if "generated_pdfs" not in st.session_state:
+    st.session_state.generated_pdfs = []
+
 # ── Chat history ──────────────────────────────────────────────────────────────
 
 for message in st.session_state.messages:
@@ -101,6 +110,14 @@ for message in st.session_state.messages:
             if message.get("text"):
                 st.markdown(message["text"])
             st.image(message["content"], width="stretch")
+        elif message.get("type") == "pdf":
+            if message.get("text"):
+                st.markdown(message["text"])
+            render_pdf_payload(message["content"], st.container())
+        elif message.get("type") == "chart":
+            if message.get("text"):
+                st.markdown(message["text"])
+            render_chart_payload(message["content"], st.container())
         else:
             st.markdown(message["content"])
 
@@ -122,6 +139,7 @@ if prompt := st.chat_input("What would you like to know?"):
                 response_text = ""
                 last_tool_name = None
                 chart_payloads = []
+                pdf_payloads = []
                 async for chunk in agent.stream_async(prompt):
 
                     # ── Text chunks ───────────────────────────────────────────────
@@ -166,6 +184,14 @@ if prompt := st.chat_input("What would you like to know?"):
                                         "data":       tool_input.get("data"),
                                         "color":      tool_input.get("color", ""),
                                     })
+                            elif tool_name == "generate_pdf_report":
+                                tool_input = tool_metrics.tool.get("input", {})
+                                if tool_input.get("data"):
+                                    pdf_payloads.append({
+                                        "title":   tool_input.get("title"),
+                                        "data":    tool_input.get("data"),
+                                        "summary": tool_input.get("summary", ""),
+                                    })
 
                     if isinstance(chunk, str):
                         response_text += chunk
@@ -181,12 +207,12 @@ if prompt := st.chat_input("What would you like to know?"):
                             response_text += event["text"]
                             message_placeholder.markdown(response_text + "▌")
 
-                
+
 
                 message_placeholder.markdown(response_text)
-                return response_text, chart_payloads 
+                return response_text, chart_payloads, pdf_payloads
 
-            full_response, chart_payloads  = asyncio.run(stream_response())
+            full_response, chart_payloads, pdf_payloads  = asyncio.run(stream_response())
 
             # ── Render charts ─────────────────────────────────────────────────────
             for payload in chart_payloads:
@@ -198,6 +224,15 @@ if prompt := st.chat_input("What would you like to know?"):
                     "content": payload,
                 })
 
+            # ── Render PDFs ───────────────────────────────────────────────────────
+            for payload in pdf_payloads:
+                render_pdf_payload(payload, st.container())
+                st.session_state.messages.append({
+                    "role":    "assistant",
+                    "type":    "pdf",
+                    "text":    full_response,
+                    "content": payload,
+                })
 
             images_after = len(st.session_state.generated_images)
 
@@ -237,11 +272,13 @@ with st.sidebar:
     if st.button("🗑️ Clear Chat", use_container_width=True):
         st.session_state.messages = []
         st.session_state.generated_images = []
+        st.session_state.generated_pdfs = []
         st.cache_resource.clear()
         st.rerun()
 
     st.metric("Messages",         len(st.session_state.messages))
     st.metric("Images Generated", len(st.session_state.generated_images))
+    st.metric("PDFs Generated",   len(st.session_state.generated_pdfs))
 
     st.divider()
 
@@ -254,6 +291,8 @@ with st.sidebar:
 
     st.subheader("Available Tools")
     st.text("📊 Sales Data Analytics")
+    st.text("📄 PDF Report Generation")
+    st.text("📈 Chart Rendering")
     st.text("🎨 Image Generation")
     st.text("🧮 Calculator")
     st.text("🕐 Current Time")
@@ -286,6 +325,11 @@ with st.sidebar:
         - Show Electronics sales in the North for 2024
         - Why did sales dip in mid-2024?
         - Break down June 2024 by region
+
+        **PDF reports:**
+        - Generate a PDF report of 2024 sales
+        - Create a PDF with June 2024 breakdown
+        - Make a PDF report comparing 2023 vs 2024
 
         **Other tools:**
         - Generate an image of Tokyo
