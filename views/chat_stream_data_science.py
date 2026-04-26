@@ -11,7 +11,7 @@ from strands import Agent, tool
 from strands.plugins import Plugin, hook
 from strands.hooks import BeforeToolCallEvent, AfterToolCallEvent
 from strands.models import BedrockModel
-#from strands_tools import current_time
+
 
 # Tool registry and base classes
 from cmn.tools.tool.base import ToolRegistry
@@ -20,6 +20,7 @@ from cmn.tools.tool.image.image_tool import ImageTool, ImageResponse
 from cmn.tools.tool.calculator import CalculatorTool
 from cmn.tools.tool.sales_data import SalesDataTool
 from cmn.tools.tool.chart import ChartTool
+from cmn.tools.tool.pdf import PdfTool
 
 # Old renderers (will be removed after migration)
 from views.tools.tool.base import RendererRegistry
@@ -177,11 +178,13 @@ pdf_renderer = PdfRenderer()
 renderer_registry = RendererRegistry()
 renderer_registry.register("calculator", CalculatorRendererStreamlit())
 renderer_registry.register("render_chart", ChartRenderer())
+renderer_registry.register("generate_pdf_report", pdf_renderer)
 
 tool_registry = ToolRegistry()
 tool_registry.register("calculator", CalculatorTool())
 tool_registry.register("sales_data", SalesDataTool())
 tool_registry.register("render_chart", ChartTool())
+tool_registry.register("generate_pdf_report", PdfTool())
 
 
 def log_after(event: AfterToolCallEvent) -> None:
@@ -218,6 +221,7 @@ def initialize_agent() -> Agent:
             tool_registry.get("calculator").execute,
             tool_registry.get("sales_data").execute,
             tool_registry.get("render_chart").execute,
+            tool_registry.get("generate_pdf_report").execute,
         ]
     )
 
