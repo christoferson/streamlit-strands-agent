@@ -8,20 +8,22 @@ import boto3
 import streamlit as st
 from PIL import Image
 from strands import Agent, tool
+from strands.plugins import Plugin, hook
+from strands.hooks import BeforeToolCallEvent, AfterToolCallEvent
 from strands.models import BedrockModel
-from strands_tools import current_time
+#from strands_tools import current_time
 
-# New architecture - tools
-from cmn.tools.tool.calculator import calculator
-from cmn.tools.tool.sales import sales_data
-from cmn.tools.tool.image import generate_image
-from cmn.tools.tool.pdf import generate_pdf_report
-from cmn.tools.tool.chart import render_chart
+# Tool registry and base classes
+from cmn.tools.tool.base import ToolRegistry
+from cmn.tools.tool.image.image_tool import ImageTool, ImageResponse
 
-# New architecture - renderers (mirrors cmn.tools.tool structure)
+from cmn.tools.tool.calculator import CalculatorTool
+
+# Old renderers (will be removed after migration)
+from views.tools.tool.base import RendererRegistry
 from views.tools.tool.pdf import PdfRenderer
 from views.tools.tool.chart import ChartRenderer
-from views.tools.tool.image import ImageRenderer
+from views.tools.tool.calculator import CalculatorRendererStreamlit
 
 # ── Page config ───────────────────────────────────────────────────────────────
 
@@ -164,7 +166,46 @@ Never combine chart + PDF unless explicitly requested in same message.
 Your default mode is: fetch data → show table → wait for next instruction."""
 
 
+##---
 
+# Initialize old renderers (for PDF/Chart until they're migrated)
+pdf_renderer = PdfRenderer()
+chart_renderer = ChartRenderer()
+calculator_renderer = CalculatorRendererStreamlit()
+
+renderer_registry = RendererRegistry()
+renderer_registry.register("calculator", CalculatorRendererStreamlit())
+
+tool_registry = ToolRegistry()
+tool_registry.register("calculator", CalculatorTool())
+#tool_registry.register("current_time", current_time)
+#tool_registry.register("sales_data", sales_data)
+
+
+def log_after(event: AfterToolCallEvent) -> None:
+
+    tool_name = event.tool_use['name']
+    print(f"Completed: {event.tool_use['name']}")
+
+
+
+    # Try to render with registered renderer
+    renderer = renderer_registry.get(tool_name)
+    if renderer:
+        #renderer.render(result_data, st.container())
+        print(f"DEBUG: Found renderer for tool '{tool_name}' - rendering result")
+    else:
+        print(f"No renderer registered for tool '{tool_name}' - skipping rendering")
+        # # Fallback to old routing for tools without registered renderers
+        # metadata = get_tool_metadata(tool_name)
+        # if metadata and result_data.get("status") == "success":
+        #     if metadata.artifact_type == "chart":
+        #         chart_payloads.append(result_data)
+        #     elif metadata.artifact_type == "pdf":
+        #         pdf_payloads.append(result_data)
+        #     elif metadata.artifact_type == "image":
+        #         image_payloads.append(result_data)
+    
 # ── Agent (cached) ────────────────────────────────────────────────────────────
 
 def initialize_agent() -> Agent:
@@ -175,11 +216,18 @@ def initialize_agent() -> Agent:
         temperature=0.0,  # Zero temperature for strict instruction following
     )
 
-    return Agent(
+    agent =  Agent(
         model=bedrock_model,
         system_prompt=SYSTEM_PROMPT,
-        tools=[calculator, current_time, generate_image, sales_data, render_chart, generate_pdf_report],
+        #tools=[calculator, current_time, sales_data, render_chart, generate_pdf_report],
+        tools=[
+            tool_registry.get("calculator").execute,
+        ]
     )
+
+    agent.add_hook(log_after, AfterToolCallEvent)
+
+    return agent
 
 
 # Initialize agent once per session (not per page load)
@@ -188,10 +236,7 @@ if "agent" not in st.session_state:
 
 agent = st.session_state.agent
 
-# Initialize renderers
-pdf_renderer = PdfRenderer()
-chart_renderer = ChartRenderer()
-image_renderer = ImageRenderer()
+# Image uses registry - no initialization needed, already registered in tool_new.py
 
 
 # ── UI ────────────────────────────────────────────────────────────────────────
@@ -215,7 +260,26 @@ for message in st.session_state.messages:
         if message.get("type") == "image":
             if message.get("text"):
                 st.markdown(message["text"])
-            st.image(message["content"], width="stretch")
+            # Image content is now a dict with metadata, bytes are in session state
+            content = message["content"]
+            if isinstance(content, dict) and content.get("image_stored"):
+                # Retrieve from session state
+                image_index = content.get("image_index", 0)
+                if image_index < len(st.session_state.generated_images):
+                    image_bytes = st.session_state.generated_images[image_index]
+                    prompt = content.get("prompt", "")
+                    seed = content.get("seed", "")
+                    st.success(f"Image generated successfully (seed: {seed})")
+                    st.image(image_bytes, caption=prompt[:100], width="stretch")
+                    with st.expander("Generation Details"):
+                        st.write(f"**Seed:** {seed}")
+                        st.write(f"**Aspect Ratio:** {content.get('aspect_ratio', '1:1')}")
+                        st.write(f"**Prompt:** {prompt}")
+                else:
+                    st.warning("Image data not found in session")
+            else:
+                # Legacy format (PIL Image object)
+                st.image(content, width="stretch")
         elif message.get("type") == "pdf":
             if message.get("text"):
                 st.markdown(message["text"])
@@ -239,15 +303,35 @@ if prompt := st.chat_input("What would you like to know?"):
         message_placeholder = st.empty()
 
         try:
-            images_before = len(st.session_state.generated_images)
-
             async def stream_response() -> str:
                 response_text = ""
-                tool_names_map = {}
+                #tool_names_map = {}
                 chart_payloads = []
                 pdf_payloads = []
+                image_payloads = []
+                current_tool_renderer = None
+                current_tool_result = None
 
                 async for chunk in agent.stream_async(prompt):
+
+                    if isinstance(chunk, dict):
+                        print(f"DEBUG CHUNK KEYS: {chunk.keys()}")
+
+                        # Check for tool use information
+                        if "current_tool_use" in chunk:
+                            current_tool_use = chunk.get("current_tool_use", {})
+                            current_tool_name = current_tool_use.get('name')
+                            print(f"DEBUG current_tool_use: {current_tool_use}")
+                            current_tool_renderer = renderer_registry.get(current_tool_name)
+
+                        # Check for tool results
+                        if "tool_result" in chunk:
+                            print(f"DEBUG tool_result chunk: {chunk}")
+
+                        if "tool_output" in chunk:
+                            print(f"DEBUG tool_output chunk: {chunk}")
+
+
                     # Track tool use blocks
                     if isinstance(chunk, dict) and "event" in chunk:
                         event = chunk["event"]
@@ -255,12 +339,18 @@ if prompt := st.chat_input("What would you like to know?"):
                         # Tool use starts
                         if "contentBlockStart" in event:
                             start_block = event["contentBlockStart"]
+                            #print(f"DEBUG contentBlockStart: {start_block}")
                             if "toolUse" in start_block:
                                 tool_use = start_block["toolUse"]
                                 tool_use_id = tool_use.get("toolUseId")
                                 tool_name = tool_use.get("name")
                                 if tool_use_id and tool_name:
                                     tool_names_map[tool_use_id] = tool_name
+                                    print(f"DEBUG: Captured tool mapping - {tool_use_id} -> {tool_name}")
+                                    #print(f"{tool_names_map}")
+                                    tool_registry.get(tool_name),
+                                else:
+                                    print(f"DEBUG: Missing tool_use_id or tool_name: {tool_use}")
 
                         # Text chunks
                         if "contentBlockDelta" in event:
@@ -280,39 +370,54 @@ if prompt := st.chat_input("What would you like to know?"):
                     # Check for message chunks that contain tool results
                     if isinstance(chunk, dict) and "message" in chunk:
                         msg = chunk["message"]
+                        print(f"DEBUG MESSAGE: role={msg.get('role')}, content_keys={msg.keys()}")
+                        print(f"DEBUG MESSAGE FULL: {msg}")
 
                         if msg.get("role") == "user":
                             # User messages contain tool results
                             for block in msg.get("content", []):
+                                print(f"DEBUG BLOCK: {block}")
                                 if isinstance(block, dict) and "toolResult" in block:
                                     tool_use_id = block.get("toolUseId")
-                                    tool_name = tool_names_map.get(tool_use_id)
-
-                                    # Only process tools that return JSON payloads for rendering
-                                    if tool_name not in ["render_chart", "generate_pdf_report"]:
-                                        continue
+                                    
 
                                     # Extract content
                                     tool_result = block["toolResult"]
+                                    #print(f"DEBUG: tool_result content keys: {tool_result.keys()}")
                                     if "content" in tool_result:
+                                        #print(f"DEBUG: tool_result['content']: {tool_result['content']}")
                                         for content_item in tool_result["content"]:
+                                            #print(f"DEBUG: content_item: {content_item}")
                                             if isinstance(content_item, dict) and "text" in content_item:
                                                 result_text = content_item["text"]
+                                                #print(f"DEBUG: Extracted result_text: {result_text[:200]}")
 
                                                 try:
-                                                    result_data = json.loads(result_text)
-                                                    if result_data.get("status") == "success":
-                                                        if tool_name == "render_chart":
-                                                            chart_payloads.append(result_data)
-                                                        elif tool_name == "generate_pdf_report":
-                                                            pdf_payloads.append(result_data)
+                                                    # Parse the JSON result
+                                                    current_tool_result = json.loads(result_text)
+                                                    #print(f"DEBUG: Parsed current_tool_result: {current_tool_result}")
                                                 except json.JSONDecodeError:
-                                                    pass
+                                                    print(f"DEBUG: Failed to parse tool result JSON: {result_text}")
+
 
                 message_placeholder.markdown(response_text)
-                return response_text, chart_payloads, pdf_payloads
 
-            full_response, chart_payloads, pdf_payloads  = asyncio.run(stream_response())
+                # Render the tool result if we have both renderer and result
+                print(f"DEBUG: Before render - current_tool_renderer={current_tool_renderer}, current_tool_result={current_tool_result}")
+                if current_tool_renderer and current_tool_result:
+                    print(f"DEBUG: Calling renderer.render() with result: {current_tool_result}")
+                    current_tool_renderer.render(current_tool_result, st.container())
+                else:
+                    print(f"DEBUG: Skipping render - renderer is None: {current_tool_renderer is None}, result is None: {current_tool_result is None}")
+
+                return response_text, chart_payloads, pdf_payloads, image_payloads
+
+            full_response, chart_payloads, pdf_payloads, image_payloads = asyncio.run(stream_response())
+
+            # Debug output
+            #st.write(f"DEBUG: Captured {len(image_payloads)} image payloads")
+            #if image_payloads:
+            #    st.write("DEBUG: First image payload:", image_payloads[0])
 
             # ── Render charts ─────────────────────────────────────────────────────
             for payload in chart_payloads:
@@ -334,21 +439,22 @@ if prompt := st.chat_input("What would you like to know?"):
                     "content": payload,
                 })
 
-            images_after = len(st.session_state.generated_images)
+            # ── Render Images ─────────────────────────────────────────────────
+            for payload in image_payloads:
+                # Parse response and render
+                response = ImageResponse(**payload)
+                image_tool = ImageTool()
+                image_tool.render(response, st.container())
 
-            if images_after > images_before:
-                for i in range(images_before, images_after):
-                    image = Image.open(
-                        BytesIO(st.session_state.generated_images[i])
-                    )
-                    st.image(image, width="stretch")
-                    st.session_state.messages.append({
-                        "role":    "assistant",
-                        "type":    "image",
-                        "text":    full_response,
-                        "content": image,
-                    })
-            else:
+                st.session_state.messages.append({
+                    "role":    "assistant",
+                    "type":    "image",
+                    "text":    full_response,
+                    "content": payload,
+                })
+
+            # Add text-only message if no payloads were generated
+            if not chart_payloads and not pdf_payloads and not image_payloads:
                 st.session_state.messages.append({
                     "role":    "assistant",
                     "content": full_response,

@@ -1,17 +1,18 @@
 """
-Calculator Tool Package - Pure business logic and framework-agnostic tool.
+Calculator tool package.
 
-This package provides:
-- CalculatorService: Mathematical expression evaluation logic (no UI)
-- calculator: Strands @tool wrapper that returns text
-
-NO UI DEPENDENCIES - can be used from any interface.
+Provides:
+- CalculatorService: Business logic for expression evaluation
+- CalculatorTool: BaseTool wrapper with JSON responses
+- calculator: Strands @tool wrapper function
 """
 
 from .service import CalculatorService
-from .tool import calculator
+from .tool import CalculatorTool
+from .strands_wrapper import calculator
 
 __all__ = [
     "CalculatorService",
+    "CalculatorTool",
     "calculator",
 ]

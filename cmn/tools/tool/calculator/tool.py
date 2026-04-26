@@ -1,35 +1,39 @@
 """
-Calculator Tool - Strands agent interface (UI agnostic).
+Calculator tool implementation.
 
-This tool wraps the CalculatorService and returns pure text (no UI elements).
+Thin wrapper around CalculatorService that extends BaseTool.
 """
 
-import logging
-
+from ..base.tool import BaseTool
+from .service import CalculatorService
 from strands import tool
 
-from .service import CalculatorService
 
-logger = logging.getLogger(__name__)
-
-# Initialize service
-_calculator_service = CalculatorService()
-
-
-@tool
-def calculator(expression: str) -> str:
+class CalculatorTool(BaseTool):
     """
-    Evaluate a mathematical expression and return the result.
+    Calculator tool that evaluates mathematical expressions.
 
-    Supports standard arithmetic operations: addition, subtraction,
-    multiplication, division, exponentiation, and parentheses grouping.
-
-    Args:
-        expression: A mathematical expression string to evaluate,
-                    e.g. '2 + 2', '(3 * 4) / 2', '2 ** 10'.
-
-    Returns:
-        str: The result of the evaluated expression, or an error message
-             if the expression is invalid.
+    This is a thin wrapper around CalculatorService that:
+    1. Converts parameters to appropriate types
+    2. Calls the service
+    3. Converts results to JSON strings
+    4. Handles errors
     """
-    return _calculator_service.evaluate(expression)
+
+    def __init__(self):
+        """Initialize calculator tool with service."""
+        service = CalculatorService()
+        super().__init__(service)
+
+    @tool(name="calculator")
+    def execute(self, expression: str) -> str:
+        """
+        Evaluate a mathematical expression.
+
+        Args:
+            expression: Mathematical expression string (e.g., "2 + 2")
+
+        Returns:
+            JSON string with result or error
+        """
+        return self.execute_and_jsonify(expression=expression)

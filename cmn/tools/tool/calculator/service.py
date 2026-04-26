@@ -1,35 +1,47 @@
 """
-Calculator Service - Pure business logic for mathematical expression evaluation.
+Calculator service implementation.
 
-This module contains NO UI dependencies and can be used from any interface.
+Pure business logic for mathematical expression evaluation.
 """
 
-import logging
+from typing import Any, Dict
+from ..base.service import BaseService
 
-logger = logging.getLogger(__name__)
 
+class CalculatorService(BaseService):
+    """
+    Service for evaluating mathematical expressions.
 
-class CalculatorService:
-    """Pure business logic for calculator operations - UI agnostic."""
+    Safely evaluates arithmetic expressions using a restricted namespace.
+    """
 
-    def evaluate(self, expression: str) -> str:
+    def __init__(self):
+        """Initialize calculator service (no output directory needed)."""
+        super().__init__(output_dir=None)
+
+    def execute(self, expression: str) -> Dict[str, Any]:
         """
-        Evaluate a mathematical expression and return the result.
-
-        Supports standard arithmetic operations: addition, subtraction,
-        multiplication, division, exponentiation, and parentheses grouping.
+        Evaluate a mathematical expression.
 
         Args:
-            expression: A mathematical expression string to evaluate,
-                        e.g. '2 + 2', '(3 * 4) / 2', '2 ** 10'.
+            expression: Mathematical expression string (e.g., "2 + 2", "(3 * 4) / 2")
 
         Returns:
-            str: The result of the evaluated expression, or an error message
-                 if the expression is invalid.
+            Dict with status, result, and optional error:
+            {
+                "status": "success" | "error",
+                "result": float (if success),
+                "expression": str,
+                "error": str (if error)
+            }
         """
-        logger.info("Evaluating expression: %s", expression)
+        if not expression or not expression.strip():
+            return {
+                "status": "error",
+                "error": "Expression cannot be empty",
+                "expression": expression
+            }
 
-        # Restrict eval to safe math operations only
         allowed = {
             "__builtins__": {},
             "abs": abs,
@@ -40,9 +52,27 @@ class CalculatorService:
         }
 
         try:
-            result = eval(expression, allowed)  # noqa: S307
-            return str(result)
+            result = eval(expression, allowed)
+            return {
+                "status": "success",
+                "result": result,
+                "expression": expression
+            }
         except ZeroDivisionError:
-            return "Error: division by zero."
+            return {
+                "status": "error",
+                "error": "Division by zero",
+                "expression": expression
+            }
+        except (SyntaxError, NameError, TypeError) as e:
+            return {
+                "status": "error",
+                "error": f"Invalid expression: {str(e)}",
+                "expression": expression
+            }
         except Exception as e:
-            return f"Error evaluating expression: {e}"
+            return {
+                "status": "error",
+                "error": f"Evaluation failed: {str(e)}",
+                "expression": expression
+            }
