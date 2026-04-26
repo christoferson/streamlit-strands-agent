@@ -18,12 +18,14 @@ from cmn.tools.tool.base import ToolRegistry
 from cmn.tools.tool.image.image_tool import ImageTool, ImageResponse
 
 from cmn.tools.tool.calculator import CalculatorTool
+from cmn.tools.tool.sales_data import SalesDataTool
 
 # Old renderers (will be removed after migration)
 from views.tools.tool.base import RendererRegistry
 from views.tools.tool.pdf import PdfRenderer
 from views.tools.tool.chart import ChartRenderer
 from views.tools.tool.calculator import CalculatorRendererStreamlit
+
 
 # ── Page config ───────────────────────────────────────────────────────────────
 
@@ -178,8 +180,7 @@ renderer_registry.register("calculator", CalculatorRendererStreamlit())
 
 tool_registry = ToolRegistry()
 tool_registry.register("calculator", CalculatorTool())
-#tool_registry.register("current_time", current_time)
-#tool_registry.register("sales_data", sales_data)
+tool_registry.register("sales_data", SalesDataTool())
 
 
 def log_after(event: AfterToolCallEvent) -> None:
@@ -196,15 +197,7 @@ def log_after(event: AfterToolCallEvent) -> None:
         print(f"DEBUG: Found renderer for tool '{tool_name}' - rendering result")
     else:
         print(f"No renderer registered for tool '{tool_name}' - skipping rendering")
-        # # Fallback to old routing for tools without registered renderers
-        # metadata = get_tool_metadata(tool_name)
-        # if metadata and result_data.get("status") == "success":
-        #     if metadata.artifact_type == "chart":
-        #         chart_payloads.append(result_data)
-        #     elif metadata.artifact_type == "pdf":
-        #         pdf_payloads.append(result_data)
-        #     elif metadata.artifact_type == "image":
-        #         image_payloads.append(result_data)
+
     
 # ── Agent (cached) ────────────────────────────────────────────────────────────
 
@@ -222,6 +215,7 @@ def initialize_agent() -> Agent:
         #tools=[calculator, current_time, sales_data, render_chart, generate_pdf_report],
         tools=[
             tool_registry.get("calculator").execute,
+            tool_registry.get("sales_data").execute,
         ]
     )
 
