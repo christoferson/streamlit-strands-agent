@@ -57,7 +57,7 @@ class ChartRenderer:
                 if color_col:
                     fig = self._create_grouped_chart(df, chart_type, x, y, color_col)
                 else:
-                    fig = self._create_simple_chart(df, chart_type, x, y, result.get("y_columns", []))
+                    fig = self._create_simple_chart(df, chart_type, x, result.get("y_columns", []))
 
                 # Update x-axis ordering
                 if x_order:

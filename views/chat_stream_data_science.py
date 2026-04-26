@@ -19,6 +19,7 @@ from cmn.tools.tool.image.image_tool import ImageTool, ImageResponse
 
 from cmn.tools.tool.calculator import CalculatorTool
 from cmn.tools.tool.sales_data import SalesDataTool
+from cmn.tools.tool.chart import ChartTool
 
 # Old renderers (will be removed after migration)
 from views.tools.tool.base import RendererRegistry
@@ -172,15 +173,15 @@ Your default mode is: fetch data → show table → wait for next instruction.""
 
 # Initialize old renderers (for PDF/Chart until they're migrated)
 pdf_renderer = PdfRenderer()
-chart_renderer = ChartRenderer()
-calculator_renderer = CalculatorRendererStreamlit()
 
 renderer_registry = RendererRegistry()
 renderer_registry.register("calculator", CalculatorRendererStreamlit())
+renderer_registry.register("render_chart", ChartRenderer())
 
 tool_registry = ToolRegistry()
 tool_registry.register("calculator", CalculatorTool())
 tool_registry.register("sales_data", SalesDataTool())
+tool_registry.register("render_chart", ChartTool())
 
 
 def log_after(event: AfterToolCallEvent) -> None:
@@ -216,6 +217,7 @@ def initialize_agent() -> Agent:
         tools=[
             tool_registry.get("calculator").execute,
             tool_registry.get("sales_data").execute,
+            tool_registry.get("render_chart").execute,
         ]
     )
 

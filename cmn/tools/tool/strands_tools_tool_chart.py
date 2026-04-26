@@ -1,5 +1,7 @@
+import hashlib
 import json
 import logging
+import time
 
 import pandas as pd
 import plotly.express as px
@@ -105,4 +107,8 @@ def render_chart_payload(payload: dict, container) -> None:
                 fig = px.area(plot_df, x=x, y=y_columns)
 
         fig.update_xaxes(categoryorder="array", categoryarray=x_order)
-        st.plotly_chart(fig, width="content")
+
+        # Generate unique key with timestamp to avoid duplicate widget errors
+        # This ensures each chart render (even with same data) gets a unique key
+        chart_key = hashlib.md5(f"{title}_{len(data)}_{x}_{y}_{time.time()}".encode()).hexdigest()
+        st.plotly_chart(fig, use_container_width=True, key=f"chart_{chart_key}")
