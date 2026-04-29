@@ -210,6 +210,9 @@ __marimo__/
 # Generated outputs
 outputs/
 *.pdf
+*.png
+*.jpg
+*.jpeg
 
 # Temporary files
 *.tmp.*
