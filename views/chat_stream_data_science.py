@@ -171,14 +171,10 @@ Your default mode is: fetch data → show table → wait for next instruction.""
 
 
 ##---
-
-# Initialize old renderers (for PDF/Chart until they're migrated)
-pdf_renderer = PdfRenderer()
-
 renderer_registry = RendererRegistry()
 renderer_registry.register("calculator", CalculatorRendererStreamlit())
 renderer_registry.register("render_chart", ChartRenderer())
-renderer_registry.register("generate_pdf_report", pdf_renderer)
+renderer_registry.register("generate_pdf_report", PdfRenderer())
 
 tool_registry = ToolRegistry()
 tool_registry.register("calculator", CalculatorTool())
@@ -191,8 +187,6 @@ def log_after(event: AfterToolCallEvent) -> None:
 
     tool_name = event.tool_use['name']
     print(f"Completed: {event.tool_use['name']}")
-
-
 
     # Try to render with registered renderer
     renderer = renderer_registry.get(tool_name)
@@ -236,10 +230,6 @@ if "agent" not in st.session_state:
 
 agent = st.session_state.agent
 
-# Image uses registry - no initialization needed, already registered in tool_new.py
-
-
-# ── UI ────────────────────────────────────────────────────────────────────────
 
 st.title("Strands Chat App")
 st.caption("Powered by Claude Sonnet 4 · Stability AI · Sales Analytics")
@@ -440,18 +430,18 @@ if prompt := st.chat_input("What would you like to know?"):
                 })
 
             # ── Render Images ─────────────────────────────────────────────────
-            for payload in image_payloads:
-                # Parse response and render
-                response = ImageResponse(**payload)
-                image_tool = ImageTool()
-                image_tool.render(response, st.container())
+            # for payload in image_payloads:
+            #     # Parse response and render
+            #     response = ImageResponse(**payload)
+            #     image_tool = ImageTool()
+            #     image_tool.render(response, st.container())
 
-                st.session_state.messages.append({
-                    "role":    "assistant",
-                    "type":    "image",
-                    "text":    full_response,
-                    "content": payload,
-                })
+            #     st.session_state.messages.append({
+            #         "role":    "assistant",
+            #         "type":    "image",
+            #         "text":    full_response,
+            #         "content": payload,
+            #     })
 
             # Add text-only message if no payloads were generated
             if not chart_payloads and not pdf_payloads and not image_payloads:
